@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Antrian Layanan Akademik FT UNESA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+<style>
+  :root {
+    --bg: #eef1f6;
+    --surface: #ffffff;
+    --ink: #14213d;
+    --muted: #5b6678;
+    --line: #d5dbe6;
+    --blue: #12306b;
+    --gold: #f2b01e;
+    --ok: #1f8a4c;
+    --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1524;
+      --surface: #172036;
+      --ink: #e8ecf5;
+      --muted: #9aa5bb;
+      --line: #2a3550;
+      --blue: #1b3f8c;
+      --ok: #4cc27f;
+      --bad: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Barlow", system-ui, sans-serif;
+    line-height: 1.5;
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 1.9rem; line-height: 1.1; margin: 0; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  .status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: .9rem; font-weight: 500; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .status.on .dot { background: var(--ok); }
+  .status.off .dot { background: var(--bad); }
+
+  .board { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; }
+  .called { background: var(--blue); color: #fff; border-radius: 6px; padding: 28px 28px 24px; border-left: 8px solid var(--gold); }
+  .called .label { font-size: 1.05rem; font-weight: 500; opacity: .85; }
+  .called .num { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: clamp(6rem, 22vw, 11rem); line-height: .95; color: var(--gold); margin-top: 4px; }
+  .called .hint { opacity: .85; margin-top: 4px; }
+
+  .stats { display: grid; grid-template-rows: 1fr 1fr; gap: 16px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px 22px; }
+  .stat .label { color: var(--muted); font-weight: 500; }
+  .stat .val { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 3.6rem; line-height: 1.05; }
+
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 20px 0 28px; }
+  button { font: inherit; font-weight: 600; border-radius: 6px; padding: 14px 24px; cursor: pointer; border: 2px solid var(--blue); }
+  button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+  .primary { background: var(--blue); color: #fff; flex: 1 1 260px; font-size: 1.1rem; }
+  .secondary { background: transparent; color: var(--ink); border-color: var(--line); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  h2 { font-family: "Barlow Condensed", sans-serif; font-size: 1.4rem; margin: 0 0 10px; }
+  .history { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 20px; }
+  .history ul { list-style: none; margin: 0; padding: 0; }
+  .history li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .history li:last-child { border-bottom: 0; }
+  .history .n { font-weight: 600; }
+  .history .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); padding: 14px 0; }
+
+  footer { margin-top: 20px; color: var(--muted); font-size: .85rem; }
+
+  @media (max-width: 680px) { .board { grid-template-columns: 1fr; } .stats { grid-template-rows: none; grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Antrian Layanan Akademik</h1>
+      <p>Fakultas Teknik, Universitas Negeri Surabaya</p>
+    </div>
+    <div id="status" class="status"><span class="dot"></span><span id="statusText">Menyambung ke broker...</span></div>
+  </header>
+
+  <section class="board" aria-live="polite">
+    <div class="called">
+      <div class="label">Sedang dipanggil</div>
+      <div class="num" id="dipanggil">0</div>
+      <div class="hint" id="hint">Belum ada nomor yang dipanggil</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="label">Nomor terakhir diambil</div><div class="val" id="terakhir">0</div></div>
+      <div class="stat"><div class="label">Sisa antrian</div><div class="val" id="sisa">0</div></div>
+    </div>
+  </section>
+
+  <div class="actions">
+    <button id="btnPanggil" class="primary" disabled>Panggil nomor berikutnya</button>
+    <button id="btnReset" class="secondary" disabled>Reset antrian</button>
+  </div>
+
+  <section>
+    <h2>Riwayat panggilan</h2>
+    <div class="history">
+      <ul id="riwayat"></ul>
+      <div id="kosong" class="empty">Belum ada panggilan. Tekan tombol kuning di ESP32 atau tombol di atas.</div>
+    </div>
+  </section>
+
+  <footer>Data dikirim lewat MQTT (WebSocket) dari ESP32 di Wokwi. Topic: <span id="topicInfo"></span></footer>
+</div>
+
+<script>
+  // ====== UBAH BAGIAN INI: harus SAMA PERSIS dengan topic di kode ESP32 ======
+  const PREFIX = "unesa/kelompokku3/antrian";
+  // ===========================================================================
+
+  const TOPIC_TERAKHIR  = PREFIX + "/terakhir";
+  const TOPIC_DIPANGGIL = PREFIX + "/dipanggil";
+  const TOPIC_CMD       = PREFIX + "/cmd";
+
+  const BROKER = "broker.hivemq.com";
+  const useSSL = location.protocol === "https:";   // https -> wss:8884, selain itu ws:8000
+  const PORT   = useSSL ? 8884 : 8000;
+
+  const $ = id => document.getElementById(id);
+  $("topicInfo").textContent = PREFIX + "/…";
+
+  let terakhir = 0;
+  let dipanggil = 0;
+  let sudahTerima = false;   // supaya data awal (retained) tidak masuk riwayat
+
+  function render() {
+    const sisa = Math.max(terakhir - dipanggil, 0);
+    $("dipanggil").textContent = dipanggil;
+    $("terakhir").textContent = terakhir;
+    $("sisa").textContent = sisa;
+    $("hint").textContent = dipanggil > 0 ? "Silakan menuju loket" : "Belum ada nomor yang dipanggil";
+    $("btnPanggil").disabled = !client.isConnected() || sisa === 0;
+    $("btnReset").disabled = !client.isConnected();
+  }
+
+  function tambahRiwayat(nomor) {
+    const jam = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="n">Nomor ' + nomor + '</span><span class="t">' + jam + '</span>';
+    $("riwayat").prepend(li);
+    $("kosong").style.display = "none";
+  }
+
+  function kosongkanRiwayat() {
+    $("riwayat").innerHTML = "";
+    $("kosong").style.display = "block";
+  }
+
+  function setStatus(on, teks) {
+    $("status").className = "status " + (on ? "on" : "off");
+    $("statusText").textContent = teks;
+  }
+
+  // ====== MQTT via WebSocket (Paho) ======
+  const clientId = "web-antrian-" + Math.random().toString(16).slice(2, 8);
+  const client = new Paho.MQTT.Client(BROKER, PORT, "/mqtt", clientId);
+
+  client.onConnectionLost = () => {
+    setStatus(false, "Terputus, menyambung ulang...");
+    render();
+    setTimeout(connect, 2000);
+  };
+
+  client.onMessageArrived = (msg) => {
+    const nilai = parseInt(msg.payloadString, 10);
+    if (isNaN(nilai)) return;
+
+    if (msg.destinationName === TOPIC_TERAKHIR) {
+      terakhir = nilai;
+    } else if (msg.destinationName === TOPIC_DIPANGGIL) {
+      if (nilai === 0) {
+        kosongkanRiwayat();
+      } else if (sudahTerima && nilai > dipanggil) {
+        tambahRiwayat(nilai);
+      }
+      dipanggil = nilai;
+      sudahTerima = true;
+    }
+    render();
+  };
+
+  function connect() {
+    client.connect({
+      useSSL: useSSL,
+      timeout: 5,
+      onSuccess: () => {
+        setStatus(true, "Terhubung ke broker");
+        client.subscribe(TOPIC_TERAKHIR);
+        client.subscribe(TOPIC_DIPANGGIL);
+        render();
+      },
+      onFailure: () => {
+        setStatus(false, "Gagal menyambung, mencoba lagi...");
+        setTimeout(connect, 3000);
+      }
+    });
+  }
+
+  function kirim(perintah) {
+    const m = new Paho.MQTT.Message(perintah);
+    m.destinationName = TOPIC_CMD;
+    client.send(m);
+  }
+
+  $("btnPanggil").addEventListener("click", () => kirim("panggil"));
+  $("btnReset").addEventListener("click", () => {
+    if (confirm("Reset antrian ke 0?")) kirim("reset");
+  });
+
+  connect();
+</script>
+</body>
+</html>
